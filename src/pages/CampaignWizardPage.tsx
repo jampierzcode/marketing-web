@@ -1,256 +1,395 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation } from "@tanstack/react-query";
 import { useParams } from "react-router-dom";
 import { api } from "../lib/api";
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import {
+  Alert,
+  Button,
+  Card,
+  Form,
+  Input,
+  InputNumber,
+  Select,
+  Space,
+  Spin,
+  Steps,
+  Typography,
+} from "antd";
+
+const { Title, Text } = Typography;
 
 export default function CampaignWizardPage() {
   const { id } = useParams();
   const restaurantId = Number(id);
-  const qc = useQueryClient();
-
-  const [objective, setObjective] = useState<
-    "reservations" | "whatsapp" | "reach"
-  >("reservations");
-  const [dayToPush, setDayToPush] = useState<
-    "mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun"
-  >("thu");
-  const [budgetDaily, setBudgetDaily] = useState(300);
-  const [zone, setZone] = useState("Roma/Condesa");
-  const [duration, setDuration] = useState<"6s" | "10s" | "15s">("15s");
-  const [videoMethod, setVideoMethod] = useState<
-    "manual_capcut" | "canva_template" | "tiktok_symphony"
-  >("manual_capcut");
 
   const [requestId, setRequestId] = useState<number | null>(null);
+  const [ideas, setIdeas] = useState<any[] | null>(null);
   const [selectedIdeaId, setSelectedIdeaId] = useState<number | null>(null);
-  const [briefId, setBriefId] = useState<number | null>(null);
+  const [brief, setBrief] = useState<any | null>(null);
+
+  const [videoJob, setVideoJob] = useState<any | null>(null);
+  const [videoStatus, setVideoStatus] = useState<any | null>(null);
+
+  const apiBase = import.meta.env.VITE_API_BASE || "http://localhost:3333/api";
+  const downloadUrl = useMemo(() => {
+    if (!videoJob?.id) return null;
+    return `${apiBase}/videos/${videoJob.id}/content`;
+  }, [videoJob, apiBase]);
 
   const createReq = useMutation({
-    mutationFn: async () => {
-      const payload = {
-        restaurantId,
-        objective,
-        dayToPush,
-        budgetDaily,
-        zone,
-        duration,
-        videoMethod,
-      };
-      return (await api.post("/campaign-requests", payload)).data as {
-        id: number;
-      };
-    },
-    onSuccess: async (data) => {
-      setRequestId(data.id);
-      await qc.invalidateQueries({
-        queryKey: ["campaign-requests", restaurantId],
-      });
-    },
+    mutationFn: async (payload: any) =>
+      (await api.post("/campaign-requests", payload)).data as { id: number },
+    onSuccess: (data) => setRequestId(data.id),
   });
 
-  const ideas = useQuery({
-    queryKey: ["ideas", requestId],
-    queryFn: async () =>
+  const generateIdeas = useMutation({
+    mutationFn: async () =>
       (await api.post(`/campaign-requests/${requestId}/ideas`)).data as any[],
-    enabled: !!requestId,
+    onSuccess: (data) => {
+      setIdeas(data);
+      setSelectedIdeaId(null);
+      setBrief(null);
+      setVideoJob(null);
+      setVideoStatus(null);
+    },
   });
 
   const selectIdea = useMutation({
     mutationFn: async (ideaId: number) =>
-      (await api.post(`/campaign-ideas/${ideaId}/select`)).data as any,
+      (await api.post(`/campaign-ideas/${ideaId}/select`)).data,
     onSuccess: (data) => setSelectedIdeaId(data.id),
   });
 
   const generateBrief = useMutation({
     mutationFn: async () =>
-      (await api.post(`/campaign-requests/${requestId}/brief`)).data as {
-        id: number;
-      },
-    onSuccess: (data) => setBriefId(data.id),
+      (await api.post(`/campaign-requests/${requestId}/brief`)).data,
+    onSuccess: (data) => setBrief(data),
   });
 
-  const brief = useQuery({
-    queryKey: ["brief", briefId],
-    queryFn: async () =>
-      (await api.get(`/creative-briefs/${briefId}`)).data as any,
-    enabled: !!briefId,
+  const createVideo = useMutation({
+    mutationFn: async () =>
+      (await api.post(`/campaign-requests/${requestId}/video`)).data,
+    onSuccess: (data) => {
+      setVideoJob(data);
+      setVideoStatus(data);
+    },
   });
+
+  // Poll video status
+  useEffect(() => {
+    if (!videoJob?.id) return;
+    const t = setInterval(async () => {
+      try {
+        const res = await api.get(`/videos/${videoJob.id}`);
+        setVideoStatus(res.data);
+        if (res.data.status === "completed" || res.data.status === "failed") {
+          clearInterval(t);
+        }
+      } catch {
+        // ignore transient
+      }
+    }, 2500);
+    return () => clearInterval(t);
+  }, [videoJob?.id]);
 
   return (
     <div>
-      <h3>Crear campaña (MVP)</h3>
+      <Title level={3}>Crear campaña (MVP)</Title>
 
       {!requestId && (
-        <div style={{ display: "grid", gap: 8, maxWidth: 520 }}>
-          <label>
-            Objetivo
-            <select
-              value={objective}
-              onChange={(e) => setObjective(e.target.value as any)}
-              style={{ width: "100%" }}
-            >
-              <option value="reservations">Reservas</option>
-              <option value="whatsapp">WhatsApp</option>
-              <option value="reach">Alcance</option>
-            </select>
-          </label>
-
-          <label>
-            Día a impulsar
-            <select
-              value={dayToPush}
-              onChange={(e) => setDayToPush(e.target.value as any)}
-              style={{ width: "100%" }}
-            >
-              <option value="mon">Lun</option>
-              <option value="tue">Mar</option>
-              <option value="wed">Mié</option>
-              <option value="thu">Jue</option>
-              <option value="fri">Vie</option>
-              <option value="sat">Sáb</option>
-              <option value="sun">Dom</option>
-            </select>
-          </label>
-
-          <label>
-            Presupuesto diario (MXN)
-            <input
-              type="number"
-              value={budgetDaily}
-              onChange={(e) => setBudgetDaily(Number(e.target.value))}
-              style={{ width: "100%" }}
-            />
-          </label>
-
-          <label>
-            Zona
-            <input
-              value={zone}
-              onChange={(e) => setZone(e.target.value)}
-              style={{ width: "100%" }}
-            />
-          </label>
-
-          <label>
-            Duración
-            <select
-              value={duration}
-              onChange={(e) => setDuration(e.target.value as any)}
-              style={{ width: "100%" }}
-            >
-              <option value="6s">6s</option>
-              <option value="10s">10s</option>
-              <option value="15s">15s</option>
-            </select>
-          </label>
-
-          <label>
-            Método video
-            <select
-              value={videoMethod}
-              onChange={(e) => setVideoMethod(e.target.value as any)}
-              style={{ width: "100%" }}
-            >
-              <option value="manual_capcut">Manual (CapCut)</option>
-              <option value="canva_template">Canva template</option>
-              <option value="tiktok_symphony">TikTok Symphony</option>
-            </select>
-          </label>
-
-          <button
-            onClick={() => createReq.mutate()}
-            disabled={createReq.isPending}
+        <Card>
+          <Form
+            layout="vertical"
+            onFinish={(values) => {
+              createReq.mutate({
+                restaurantId,
+                objective: values.objective,
+                dayToPush: values.dayToPush,
+                budgetDaily: values.budgetDaily,
+                zone: values.zone,
+                duration: values.duration,
+                videoMethod: values.videoMethod,
+              });
+            }}
+            initialValues={{
+              objective: "reservations",
+              dayToPush: "thu",
+              budgetDaily: 300,
+              zone: "Roma/Condesa",
+              duration: "15s",
+              videoMethod: "manual_capcut",
+            }}
           >
-            {createReq.isPending ? "Creando…" : "Crear solicitud"}
-          </button>
-        </div>
+            <Form.Item
+              name="objective"
+              label="Objetivo"
+              rules={[{ required: true }]}
+            >
+              <Select
+                options={[
+                  { value: "reservations", label: "Reservas" },
+                  { value: "whatsapp", label: "WhatsApp" },
+                  { value: "reach", label: "Alcance" },
+                ]}
+              />
+            </Form.Item>
+
+            <Form.Item
+              name="dayToPush"
+              label="Día a impulsar"
+              rules={[{ required: true }]}
+            >
+              <Select
+                options={[
+                  { value: "mon", label: "Lun" },
+                  { value: "tue", label: "Mar" },
+                  { value: "wed", label: "Mié" },
+                  { value: "thu", label: "Jue" },
+                  { value: "fri", label: "Vie" },
+                  { value: "sat", label: "Sáb" },
+                  { value: "sun", label: "Dom" },
+                ]}
+              />
+            </Form.Item>
+
+            <Form.Item
+              name="budgetDaily"
+              label="Presupuesto diario (MXN)"
+              rules={[{ required: true }]}
+            >
+              <InputNumber style={{ width: "100%" }} min={1} />
+            </Form.Item>
+
+            <Form.Item name="zone" label="Zona">
+              <Input />
+            </Form.Item>
+
+            <Form.Item
+              name="duration"
+              label="Duración"
+              rules={[{ required: true }]}
+            >
+              <Select
+                options={[
+                  { value: "6s", label: "6s" },
+                  { value: "10s", label: "10s" },
+                  { value: "15s", label: "15s" },
+                ]}
+              />
+            </Form.Item>
+
+            <Form.Item
+              name="videoMethod"
+              label="Método video"
+              rules={[{ required: true }]}
+            >
+              <Select
+                options={[
+                  { value: "manual_capcut", label: "Manual (CapCut)" },
+                  { value: "canva_template", label: "Canva template" },
+                  { value: "tiktok_symphony", label: "TikTok Symphony" },
+                ]}
+              />
+            </Form.Item>
+
+            <Button
+              type="primary"
+              htmlType="submit"
+              loading={createReq.isPending}
+            >
+              Crear solicitud
+            </Button>
+          </Form>
+        </Card>
       )}
 
       {requestId && (
-        <div>
-          <p>
-            Request ID: <b>{requestId}</b>
-          </p>
+        <Space direction="vertical" size={12} style={{ width: "100%" }}>
+          <Alert type="info" message={`Request ID: ${requestId}`} />
 
-          <h4>1) Ideas (elige 1)</h4>
-          {ideas.isLoading && <p>Generando ideas…</p>}
-          {ideas.data && (
-            <div style={{ display: "grid", gap: 10 }}>
-              {ideas.data.map((i) => (
-                <div
-                  key={i.id}
-                  style={{
-                    border: "1px solid #ddd",
-                    padding: 12,
-                    borderRadius: 8,
-                  }}
-                >
-                  <b>{i.title}</b>
-                  <p style={{ marginTop: 6 }}>{i.description}</p>
-                  <p style={{ marginTop: 6, opacity: 0.7, fontSize: 12 }}>
-                    {i.rationale}
-                  </p>
-                  <button
-                    onClick={() => selectIdea.mutate(i.id)}
-                    disabled={selectIdea.isPending}
-                  >
-                    {selectedIdeaId === i.id
-                      ? "Seleccionada ✅"
-                      : "Seleccionar"}
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
+          <Steps
+            current={
+              !ideas
+                ? 0
+                : !selectedIdeaId
+                ? 1
+                : !brief
+                ? 2
+                : !videoJob
+                ? 3
+                : videoStatus?.status === "completed"
+                ? 4
+                : 3
+            }
+            items={[
+              { title: "Generar ideas" },
+              { title: "Seleccionar idea" },
+              { title: "Generar brief" },
+              { title: "Crear video" },
+              { title: "Descargar" },
+            ]}
+          />
 
-          <h4 style={{ marginTop: 16 }}>2) Brief (storyboard + receta)</h4>
-          <button
-            onClick={() => generateBrief.mutate()}
-            disabled={!selectedIdeaId || generateBrief.isPending}
+          <Card
+            title="1) Ideas"
+            extra={
+              <Button
+                type="primary"
+                onClick={() => generateIdeas.mutate()}
+                disabled={!requestId}
+                loading={generateIdeas.isPending}
+              >
+                Generar ideas con OpenAI
+              </Button>
+            }
           >
-            {generateBrief.isPending ? "Generando…" : "Generar brief"}
-          </button>
+            {generateIdeas.isPending && (
+              <Space>
+                <Spin />
+                <Text>OpenAI creando ideas…</Text>
+              </Space>
+            )}
 
-          {brief.data && (
-            <div
-              style={{
-                marginTop: 12,
-                border: "1px solid #ddd",
-                padding: 12,
-                borderRadius: 8,
-              }}
-            >
-              <h4 style={{ marginTop: 0 }}>Hook</h4>
-              <p>{brief.data.hook}</p>
-
-              <h4>CTA</h4>
-              <p>{brief.data.cta}</p>
-
-              <h4>Storyboard</h4>
-              <ol>
-                {brief.data.storyboard?.map((b: any, idx: number) => (
-                  <li key={idx}>
-                    <b>
-                      {b.tStart}s–{b.tEnd}s
-                    </b>{" "}
-                    — {b.onScreen}
-                    <div style={{ opacity: 0.8, fontSize: 13 }}>{b.shot}</div>
-                  </li>
+            {ideas?.length ? (
+              <Space direction="vertical" style={{ width: "100%" }}>
+                {ideas.map((i) => (
+                  <Card key={i.id} type="inner" title={i.title}>
+                    <Text>{i.description}</Text>
+                    <div style={{ marginTop: 8 }}>
+                      <Text type="secondary">{i.rationale}</Text>
+                    </div>
+                    <div style={{ marginTop: 12 }}>
+                      <Button
+                        onClick={() => selectIdea.mutate(i.id)}
+                        loading={
+                          selectIdea.isPending && selectedIdeaId !== i.id
+                        }
+                        type={selectedIdeaId === i.id ? "primary" : "default"}
+                      >
+                        {selectedIdeaId === i.id
+                          ? "Seleccionada ✅"
+                          : "Seleccionar"}
+                      </Button>
+                    </div>
+                  </Card>
                 ))}
-              </ol>
+              </Space>
+            ) : (
+              <Text type="secondary">Genera ideas para ver opciones.</Text>
+            )}
+          </Card>
 
-              <h4>Receta CapCut</h4>
-              <ol>
-                {brief.data.capcutRecipe?.map((s: any, idx: number) => (
-                  <li key={idx}>
-                    <b>{s.clip}</b> ({s.duration}) — {s.onScreenText}
-                    <div style={{ opacity: 0.8, fontSize: 13 }}>{s.notes}</div>
-                  </li>
-                ))}
-              </ol>
-            </div>
-          )}
-        </div>
+          <Card
+            title="2) Brief (Storyboard + receta)"
+            extra={
+              <Button
+                type="primary"
+                onClick={() => generateBrief.mutate()}
+                disabled={!selectedIdeaId}
+                loading={generateBrief.isPending}
+              >
+                Generar brief con OpenAI
+              </Button>
+            }
+          >
+            {generateBrief.isPending && (
+              <Space>
+                <Spin />
+                <Text>OpenAI creando storyboard…</Text>
+              </Space>
+            )}
+
+            {brief && (
+              <>
+                <Title level={5}>Hook</Title>
+                <Text>{brief.hook}</Text>
+
+                <Title level={5} style={{ marginTop: 12 }}>
+                  CTA
+                </Title>
+                <Text>{brief.cta}</Text>
+
+                <Title level={5} style={{ marginTop: 12 }}>
+                  Storyboard
+                </Title>
+                <ol>
+                  {brief.storyboard?.map((b: any, idx: number) => (
+                    <li key={idx}>
+                      <b>
+                        {b.tStart}s–{b.tEnd}s
+                      </b>{" "}
+                      — {b.onScreen}
+                      <div style={{ opacity: 0.85 }}>{b.shot}</div>
+                    </li>
+                  ))}
+                </ol>
+
+                <Title level={5} style={{ marginTop: 12 }}>
+                  Receta CapCut
+                </Title>
+                <ol>
+                  {brief.capcutRecipe?.map((s: any, idx: number) => (
+                    <li key={idx}>
+                      <b>{s.clip}</b> ({s.duration}) — {s.onScreenText}
+                      <div style={{ opacity: 0.85 }}>{s.notes}</div>
+                    </li>
+                  ))}
+                </ol>
+              </>
+            )}
+          </Card>
+
+          <Card
+            title="3) Video (OpenAI / Sora)"
+            extra={
+              <Button
+                type="primary"
+                onClick={() => createVideo.mutate()}
+                disabled={!brief}
+                loading={createVideo.isPending}
+              >
+                Crear video con OpenAI
+              </Button>
+            }
+          >
+            {createVideo.isPending && (
+              <Space>
+                <Spin />
+                <Text>OpenAI creando video…</Text>
+              </Space>
+            )}
+
+            {videoStatus?.id && (
+              <div>
+                <Text>
+                  Video Job: <b>{videoStatus.id}</b> — status:{" "}
+                  <b>{videoStatus.status}</b>
+                </Text>
+                <div style={{ marginTop: 8 }}>
+                  <Text type="secondary">
+                    progress: {videoStatus.progress ?? 0}%
+                  </Text>
+                </div>
+              </div>
+            )}
+
+            {videoStatus?.status === "completed" && downloadUrl && (
+              <div style={{ marginTop: 12 }}>
+                <Button type="primary" href={downloadUrl} target="_blank">
+                  Descargar MP4
+                </Button>
+              </div>
+            )}
+
+            {videoStatus?.status === "failed" && (
+              <Alert
+                type="error"
+                message="Falló la generación del video. Revisa logs del backend."
+                style={{ marginTop: 12 }}
+              />
+            )}
+          </Card>
+        </Space>
       )}
     </div>
   );
