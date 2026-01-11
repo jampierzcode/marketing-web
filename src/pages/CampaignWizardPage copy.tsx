@@ -27,28 +27,19 @@ export default function CampaignWizardPage() {
   const [selectedIdeaId, setSelectedIdeaId] = useState<number | null>(null);
   const [brief, setBrief] = useState<any | null>(null);
 
-  // Vertex video
-  const [operationName, setOperationName] = useState<string | null>(null);
-  const [videoDone, setVideoDone] = useState(false);
-  const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
-  const [videoRaw, setVideoRaw] = useState<any | null>(null);
+  const [videoJob, setVideoJob] = useState<any | null>(null);
+  const [videoStatus, setVideoStatus] = useState<any | null>(null);
 
-  // const apiBase = import.meta.env.VITE_API_BASE || "http://localhost:3333/api";
+  const apiBase = import.meta.env.VITE_API_BASE || "http://localhost:3333/api";
+  const downloadUrl = useMemo(() => {
+    if (!videoJob?.id) return null;
+    return `${apiBase}/videos/${videoJob.id}/content`;
+  }, [videoJob, apiBase]);
 
   const createReq = useMutation({
     mutationFn: async (payload: any) =>
       (await api.post("/campaign-requests", payload)).data as { id: number },
-    onSuccess: (data) => {
-      setRequestId(data.id);
-      // reset flow
-      setIdeas(null);
-      setSelectedIdeaId(null);
-      setBrief(null);
-      setOperationName(null);
-      setVideoDone(false);
-      setDownloadUrl(null);
-      setVideoRaw(null);
-    },
+    onSuccess: (data) => setRequestId(data.id),
   });
 
   const generateIdeas = useMutation({
@@ -58,10 +49,8 @@ export default function CampaignWizardPage() {
       setIdeas(data);
       setSelectedIdeaId(null);
       setBrief(null);
-      setOperationName(null);
-      setVideoDone(false);
-      setDownloadUrl(null);
-      setVideoRaw(null);
+      setVideoJob(null);
+      setVideoStatus(null);
     },
   });
 
@@ -74,72 +63,34 @@ export default function CampaignWizardPage() {
   const generateBrief = useMutation({
     mutationFn: async () =>
       (await api.post(`/campaign-requests/${requestId}/brief`)).data,
-    onSuccess: (data) => {
-      setBrief(data);
-      setOperationName(null);
-      setVideoDone(false);
-      setDownloadUrl(null);
-      setVideoRaw(null);
-    },
+    onSuccess: (data) => setBrief(data),
   });
 
-  // Aquí es donde el backend hace: Nano Banana (imagen) + Veo (video)
-  const createVertexVideo = useMutation({
+  const createVideo = useMutation({
     mutationFn: async () =>
-      (await api.post(`/campaign-requests/${requestId}/video`)).data as {
-        operationName: string;
-      },
+      (await api.post(`/campaign-requests/${requestId}/video`)).data,
     onSuccess: (data) => {
-      setOperationName(data.operationName);
-      setVideoDone(false);
-      setDownloadUrl(null);
-      setVideoRaw(null);
+      setVideoJob(data);
+      setVideoStatus(data);
     },
   });
 
-  // polling status
+  // Poll video status
   useEffect(() => {
-    if (!operationName) return;
-
-    const encoded = encodeURIComponent(operationName);
-    let cancelled = false;
-
-    const tick = async () => {
+    if (!videoJob?.id) return;
+    const t = setInterval(async () => {
       try {
-        const res = await api.get(`/videos/veo/${encoded}/status`);
-        if (cancelled) return;
-
-        setVideoRaw(res.data);
-
-        if (res.data.done) {
-          setVideoDone(true);
-          if (res.data.downloadUrl) setDownloadUrl(res.data.downloadUrl);
-          return;
+        const res = await api.get(`/videos/${videoJob.id}`);
+        setVideoStatus(res.data);
+        if (res.data.status === "completed" || res.data.status === "failed") {
+          clearInterval(t);
         }
-
-        // sigue poll
-        setTimeout(tick, 5000);
       } catch {
-        // reintenta
-        if (!cancelled) setTimeout(tick, 7000);
+        // ignore transient
       }
-    };
-
-    tick();
-    return () => {
-      cancelled = true;
-    };
-  }, [operationName]);
-
-  const currentStep = useMemo(() => {
-    if (!requestId) return 0;
-    if (!ideas) return 1;
-    if (!selectedIdeaId) return 2;
-    if (!brief) return 3;
-    if (!operationName) return 4;
-    if (!videoDone) return 4;
-    return 5;
-  }, [requestId, ideas, selectedIdeaId, brief, operationName, videoDone]);
+    }, 2500);
+    return () => clearInterval(t);
+  }, [videoJob?.id]);
 
   return (
     <div>
@@ -257,13 +208,24 @@ export default function CampaignWizardPage() {
           <Alert type="info" message={`Request ID: ${requestId}`} />
 
           <Steps
-            current={currentStep}
+            current={
+              !ideas
+                ? 0
+                : !selectedIdeaId
+                ? 1
+                : !brief
+                ? 2
+                : !videoJob
+                ? 3
+                : videoStatus?.status === "completed"
+                ? 4
+                : 3
+            }
             items={[
-              { title: "Crear request" },
               { title: "Generar ideas" },
-              { title: "Elegir idea" },
-              { title: "Storyboard" },
-              { title: "Video (Nano+Veo)" },
+              { title: "Seleccionar idea" },
+              { title: "Generar brief" },
+              { title: "Crear video" },
               { title: "Descargar" },
             ]}
           />
@@ -277,14 +239,14 @@ export default function CampaignWizardPage() {
                 disabled={!requestId}
                 loading={generateIdeas.isPending}
               >
-                Generar ideas
+                Generar ideas con OpenAI
               </Button>
             }
           >
             {generateIdeas.isPending && (
               <Space>
                 <Spin />
-                <Text>Generando ideas…</Text>
+                <Text>OpenAI creando ideas…</Text>
               </Space>
             )}
 
@@ -299,7 +261,9 @@ export default function CampaignWizardPage() {
                     <div style={{ marginTop: 12 }}>
                       <Button
                         onClick={() => selectIdea.mutate(i.id)}
-                        loading={selectIdea.isPending}
+                        loading={
+                          selectIdea.isPending && selectedIdeaId !== i.id
+                        }
                         type={selectedIdeaId === i.id ? "primary" : "default"}
                       >
                         {selectedIdeaId === i.id
@@ -316,7 +280,7 @@ export default function CampaignWizardPage() {
           </Card>
 
           <Card
-            title="2) Storyboard / Brief"
+            title="2) Brief (Storyboard + receta)"
             extra={
               <Button
                 type="primary"
@@ -324,14 +288,14 @@ export default function CampaignWizardPage() {
                 disabled={!selectedIdeaId}
                 loading={generateBrief.isPending}
               >
-                Generar storyboard
+                Generar brief con OpenAI
               </Button>
             }
           >
             {generateBrief.isPending && (
               <Space>
                 <Spin />
-                <Text>Generando storyboard…</Text>
+                <Text>OpenAI creando storyboard…</Text>
               </Space>
             )}
 
@@ -376,45 +340,40 @@ export default function CampaignWizardPage() {
           </Card>
 
           <Card
-            title="3) Video (Nano Banana + Veo en Vertex)"
+            title="3) Video (OpenAI / Sora)"
             extra={
               <Button
                 type="primary"
-                onClick={() => createVertexVideo.mutate()}
+                onClick={() => createVideo.mutate()}
                 disabled={!brief}
-                loading={createVertexVideo.isPending}
+                loading={createVideo.isPending}
               >
-                Crear video
+                Crear video con OpenAI
               </Button>
             }
           >
-            {createVertexVideo.isPending && (
+            {createVideo.isPending && (
               <Space>
                 <Spin />
-                <Text>Vertex AI creando video…</Text>
+                <Text>OpenAI creando video…</Text>
               </Space>
             )}
 
-            {operationName && (
+            {videoStatus?.id && (
               <div>
                 <Text>
-                  Operation:{" "}
-                  <b style={{ wordBreak: "break-all" }}>{operationName}</b>
+                  Video Job: <b>{videoStatus.id}</b> — status:{" "}
+                  <b>{videoStatus.status}</b>
                 </Text>
-                <div style={{ marginTop: 6 }}>
-                  {!videoDone ? (
-                    <Space>
-                      <Spin />
-                      <Text>Generando… (poll cada 5s)</Text>
-                    </Space>
-                  ) : (
-                    <Text>Listo ✅</Text>
-                  )}
+                <div style={{ marginTop: 8 }}>
+                  <Text type="secondary">
+                    progress: {videoStatus.progress ?? 0}%
+                  </Text>
                 </div>
               </div>
             )}
 
-            {downloadUrl && (
+            {videoStatus?.status === "completed" && downloadUrl && (
               <div style={{ marginTop: 12 }}>
                 <Button type="primary" href={downloadUrl} target="_blank">
                   Descargar MP4
@@ -422,16 +381,11 @@ export default function CampaignWizardPage() {
               </div>
             )}
 
-            {videoRaw?.raw?.error && (
+            {videoStatus?.status === "failed" && (
               <Alert
-                style={{ marginTop: 12 }}
                 type="error"
-                message="Error en Vertex/Veo"
-                description={
-                  <pre style={{ whiteSpace: "pre-wrap" }}>
-                    {JSON.stringify(videoRaw.raw.error, null, 2)}
-                  </pre>
-                }
+                message="Falló la generación del video. Revisa logs del backend."
+                style={{ marginTop: 12 }}
               />
             )}
           </Card>
